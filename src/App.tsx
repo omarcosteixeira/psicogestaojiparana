@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -21,21 +21,25 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { User, Patient, Appointment, UserRole, PatientStatus, ClinicSettings, Evolution, EvolutionStatus } from './types';
-import { db } from './firebase';
-import { handleFirestoreError, OperationType } from './lib/firebase-utils';
-import { 
-  collection, 
-  addDoc, 
-  getDocs, 
-  query, 
-  where, 
-  updateDoc, 
-  doc, 
-  onSnapshot,
-  deleteDoc,
-  setDoc,
-  getDoc
-} from 'firebase/firestore';
+
+const STORAGE_KEYS = {
+  PATIENTS: 'clinica_patients',
+  USERS: 'clinica_users',
+  APPOINTMENTS: 'clinica_appointments',
+  EVOLUTIONS: 'clinica_evolutions',
+  SETTINGS: 'clinica_settings'
+};
+
+const getLocal = <T,>(key: string, defaultValue: T): T => {
+  const data = localStorage.getItem(key);
+  return data ? JSON.parse(data) : defaultValue;
+};
+
+const setLocal = (key: string, data: any) => {
+  localStorage.setItem(key, JSON.stringify(data));
+};
+
+const generateId = () => Math.random().toString(36).substring(2, 11);
 
 const ROLES: Record<UserRole, string> = {
   ADMIN: 'Administrador',
@@ -76,9 +80,10 @@ function calculateAge(birthDate: string) {
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [patients, setPatients] = useState<Patient[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [patients, setPatients] = useState<Patient[]>(() => getLocal(STORAGE_KEYS.PATIENTS, []));
+  const [users, setUsers] = useState<User[]>(() => getLocal(STORAGE_KEYS.USERS, []));
+  const [appointments, setAppointments] = useState<Appointment[]>(() => getLocal(STORAGE_KEYS.APPOINTMENTS, []));
+  const [evolutions, setEvolutions] = useState<Evolution[]>(() => getLocal(STORAGE_KEYS.EVOLUTIONS, []));
   const [loading, setLoading] = useState(false);
   const [loginData, setLoginData] = useState({ registration: '', password: '' });
   const [error, setError] = useState('');
@@ -87,138 +92,77 @@ export default function App() {
   const [publicView, setPublicView] = useState<'LANDING' | 'LOGIN' | 'REGISTER' | 'CHECK'>('LANDING');
 
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
-  const [settings, setSettings] = useState<ClinicSettings>({
+  const [settings, setSettings] = useState<ClinicSettings>(() => getLocal(STORAGE_KEYS.SETTINGS, {
     workDays: [1, 2, 3, 4, 5],
     startTime: '08:00',
     endTime: '18:00',
     interval: 60
-  });
+  }));
+
+  // Sync to localStorage whenever state changes
+  useEffect(() => { setLocal(STORAGE_KEYS.PATIENTS, patients); }, [patients]);
+  useEffect(() => { setLocal(STORAGE_KEYS.USERS, users); }, [users]);
+  useEffect(() => { setLocal(STORAGE_KEYS.APPOINTMENTS, appointments); }, [appointments]);
+  useEffect(() => { setLocal(STORAGE_KEYS.EVOLUTIONS, evolutions); }, [evolutions]);
+  useEffect(() => { setLocal(STORAGE_KEYS.SETTINGS, settings); }, [settings]);
 
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Fetch settings
+  // Initialize Admin User in LocalStorage if not exists
   useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const docRef = doc(db, 'settings', 'clinic_schedule');
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setSettings(docSnap.data() as ClinicSettings);
-        }
-      } catch (err) {
-        console.error("Erro ao carregar configurações. Verifique as regras do Firestore no Console do Firebase.", err);
-        // Fallback já está no estado inicial
-      }
-    };
-    fetchSettings();
+    const adminExists = users.some(u => u.registration === 'admin@estacio.br');
+    const requestedAdminExists = users.some(u => u.registration === 'canaldonutri@gmail.com');
+
+    const newUsers = [...users];
+    let changed = false;
+
+    if (!adminExists) {
+      newUsers.push({
+        id: generateId(),
+        name: 'Administrador Sistema',
+        registration: 'admin@estacio.br',
+        password: '91931324',
+        role: 'ADMIN'
+      });
+      changed = true;
+    }
+
+    if (!requestedAdminExists) {
+      newUsers.push({
+        id: generateId(),
+        name: 'Administrador Geral',
+        registration: 'canaldonutri@gmail.com',
+        password: '22130302aR@',
+        role: 'ADMIN'
+      });
+      changed = true;
+    }
+
+    if (changed) {
+      setUsers(newUsers);
+    }
   }, []);
 
-  // Fetch data
-  useEffect(() => {
-    if (!user) return;
-    
-    // Listen to patients
-    const unsubPatients = onSnapshot(collection(db, 'patients'), 
-      (snapshot) => {
-        const pData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as Patient));
-        setPatients(pData);
-        setDbError(null);
-      },
-      (err) => {
-        console.error("Erro ao ouvir pacientes:", err);
-        setDbError("Erro de permissão no Firestore. Verifique as Regras de Segurança no Console do Firebase.");
-      }
-    );
-
-    // Listen to users
-    const unsubUsers = onSnapshot(collection(db, 'users'), 
-      (snapshot) => {
-        const uData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as User));
-        setUsers(uData);
-      },
-      (err) => console.error("Erro ao ouvir usuários:", err)
-    );
-
-    // Listen to appointments
-    const unsubAppointments = onSnapshot(collection(db, 'appointments'), 
-      (snapshot) => {
-        const aData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as Appointment));
-        setAppointments(aData);
-      },
-      (err) => console.error("Erro ao ouvir agendamentos:", err)
-    );
-
-    return () => {
-      unsubPatients();
-      unsubUsers();
-      unsubAppointments();
-    };
-  }, [user]);
-
-  // Initialize Admin User in Firestore if not exists
-  useEffect(() => {
-    const initAdmin = async () => {
-      try {
-        // Check for default admin
-        const q1 = query(collection(db, 'users'), where('registration', '==', 'admin@estacio.br'));
-        const snapshot1 = await getDocs(q1);
-        if (snapshot1.empty) {
-          await addDoc(collection(db, 'users'), {
-            name: 'Administrador Sistema',
-            registration: 'admin@estacio.br',
-            password: '91931324',
-            role: 'ADMIN'
-          });
-        }
-
-        // Check for requested admin
-        const q2 = query(collection(db, 'users'), where('registration', '==', 'canaldonutri@gmail.com'));
-        const snapshot2 = await getDocs(q2);
-        if (snapshot2.empty) {
-          await addDoc(collection(db, 'users'), {
-            name: 'Administrador Geral',
-            registration: 'canaldonutri@gmail.com',
-            password: '22130302aR@',
-            role: 'ADMIN'
-          });
-        }
-      } catch (err) {
-        console.error("Erro ao inicializar administrador. Verifique as regras do Firestore.", err);
-      }
-    };
-    initAdmin();
-  }, []);
-
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    try {
-      const q = query(
-        collection(db, 'users'), 
-        where('registration', '==', loginData.registration),
-        where('password', '==', loginData.password)
-      );
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) {
-        const userData = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as unknown as User;
-        if (userData.blocked) {
-          setError('Acesso bloqueado. Contate o administrador.');
-        } else {
-          setUser(userData);
-        }
+    
+    const foundUser = users.find(u => u.registration === loginData.registration && (u as any).password === loginData.password);
+    
+    if (foundUser) {
+      if (foundUser.blocked) {
+        setError('Acesso bloqueado. Contate o administrador.');
       } else {
-        setError('Login ou senha incorretos');
+        setUser(foundUser);
       }
-    } catch (err) {
-      console.error(err);
-      setError('Erro ao conectar ao Firebase');
-    } finally {
-      setLoading(false);
+    } else {
+      setError('Login ou senha incorretos');
     }
+    setLoading(false);
   };
 
   const handleLogout = () => {
@@ -288,13 +232,13 @@ export default function App() {
 
           {publicView === 'REGISTER' && (
             <motion.div key="register" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="flex-1 flex overflow-y-auto">
-              <PublicRegisterView onBack={() => setPublicView('LANDING')} />
+              <PublicRegisterView onBack={() => setPublicView('LANDING')} patients={patients} setPatients={setPatients} />
             </motion.div>
           )}
 
           {publicView === 'CHECK' && (
             <motion.div key="check" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="flex-1 flex overflow-y-auto">
-              <CheckAppointmentView onBack={() => setPublicView('LANDING')} />
+              <CheckAppointmentView onBack={() => setPublicView('LANDING')} patients={patients} appointments={appointments} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -422,12 +366,16 @@ export default function App() {
               <DashboardView user={user} patients={patients} appointments={appointments} />
             </motion.div>
           )}
-          {activeTab === 'register_patient' && (
+           {activeTab === 'register_patient' && (
             <motion.div key="register" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <RegisterPatientView onComplete={() => {
-                showToast('Paciente cadastrado com sucesso!', 'success');
-                setActiveTab('dashboard');
-              }} />
+              <RegisterPatientView 
+                onComplete={() => {
+                  showToast('Paciente cadastrado com sucesso!', 'success');
+                  setActiveTab('dashboard');
+                }} 
+                patients={patients}
+                setPatients={setPatients}
+              />
             </motion.div>
           )}
           {activeTab === 'scheduling' && (
@@ -437,6 +385,8 @@ export default function App() {
                 users={users} 
                 settings={settings}
                 appointments={appointments}
+                setAppointments={setAppointments}
+                setPatients={setPatients}
                 onComplete={() => {
                   showToast('Agendamento realizado!', 'success');
                   setActiveTab('dashboard');
@@ -448,9 +398,14 @@ export default function App() {
             <motion.div key="patients" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <PatientHistoryView 
                 patients={patients} 
+                setPatients={setPatients}
                 appointments={appointments} 
+                setAppointments={setAppointments}
+                evolutions={evolutions}
+                setEvolutions={setEvolutions}
                 user={user}
                 onBack={() => setActiveTab('dashboard')} 
+                settings={settings}
               />
             </motion.div>
           )}
@@ -459,6 +414,11 @@ export default function App() {
               <MyAppointmentsView 
                 user={user} 
                 appointments={appointments} 
+                setAppointments={setAppointments}
+                patients={patients}
+                setPatients={setPatients}
+                evolutions={evolutions}
+                setEvolutions={setEvolutions}
                 settings={settings}
                 onUpdate={() => {}} 
               />
@@ -468,6 +428,7 @@ export default function App() {
             <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <SettingsView 
                 users={users} 
+                setUsers={setUsers}
                 settings={settings}
                 onUpdate={() => {}} 
                 onUpdateSettings={setSettings}
@@ -480,6 +441,8 @@ export default function App() {
       {showChangePassword && user && (
         <ChangePasswordModal 
           user={user} 
+          users={users}
+          setUsers={setUsers}
           onClose={() => setShowChangePassword(false)} 
           onSuccess={() => {
             setShowChangePassword(false);
@@ -592,7 +555,7 @@ function StatCard({ label, value, icon, color }: { label: string, value: number,
   );
 }
 
-function RegisterPatientView({ onComplete }: { onComplete: () => void }) {
+function RegisterPatientView({ onComplete, patients, setPatients }: { onComplete: () => void, patients: Patient[], setPatients: React.Dispatch<React.SetStateAction<Patient[]>> }) {
   const [formData, setFormData] = useState({
     name: '',
     birth_date: '',
@@ -604,32 +567,29 @@ function RegisterPatientView({ onComplete }: { onComplete: () => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    try {
-      // Check if CPF already exists
-      const q = query(collection(db, 'patients'), where('cpf', '==', formData.cpf));
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) {
-        setError('CPF já cadastrado');
-        setLoading(false);
-        return;
-      }
-
-      await addDoc(collection(db, 'patients'), {
-        ...formData,
-        medical_record_number: Math.floor(100000 + Math.random() * 900000).toString(),
-        status: 'TRIAGEM'
-      });
-      onComplete();
-    } catch (err) {
-      console.error(err);
-      setError('Erro ao cadastrar paciente no Firebase');
-    } finally {
+    
+    // Check if CPF already exists
+    const exists = patients.some(p => p.cpf === formData.cpf);
+    if (exists) {
+      setError('CPF já cadastrado');
       setLoading(false);
+      return;
     }
+
+    const newPatient: Patient = {
+      id: generateId(),
+      ...formData,
+      medical_record_number: Math.floor(100000 + Math.random() * 900000).toString(),
+      status: 'TRIAGEM'
+    };
+
+    setPatients([...patients, newPatient]);
+    setLoading(false);
+    onComplete();
   };
 
   return (
@@ -715,7 +675,7 @@ function RegisterPatientView({ onComplete }: { onComplete: () => void }) {
   );
 }
 
-function SchedulingView({ patients, users, settings, appointments, onComplete }: { patients: Patient[], users: User[], settings: ClinicSettings, appointments: Appointment[], onComplete: () => void }) {
+function SchedulingView({ patients, users, settings, appointments, setAppointments, setPatients, onComplete }: { patients: Patient[], users: User[], settings: ClinicSettings, appointments: Appointment[], setAppointments: React.Dispatch<React.SetStateAction<Appointment[]>>, setPatients: React.Dispatch<React.SetStateAction<Patient[]>>, onComplete: () => void }) {
   const [formData, setFormData] = useState({
     patient_id: '',
     student_id: '',
@@ -736,61 +696,56 @@ function SchedulingView({ patients, users, settings, appointments, onComplete }:
   const students = users.filter(u => u.role === 'STUDENT' || u.role === 'STUDENT_CLINIC');
   const supervisors = users.filter(u => u.role === 'PROFESSOR' || u.role === 'ADMIN');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    try {
-      // Check for available slots (max 2 per time)
-      const existingAppointments = appointments.filter(
-        a => a.date === formData.date && a.time === formData.time && a.status === 'SCHEDULED'
-      );
+    
+    // Check for available slots (max 2 per time)
+    const existingAppointmentsCount = appointments.filter(
+      a => a.date === formData.date && a.time === formData.time && a.status === 'SCHEDULED'
+    ).length;
 
-      if (existingAppointments.length >= 2) {
-        setError('Este horário já possui 2 agendamentos. Por favor, escolha outro horário.');
-        setLoading(false);
-        return;
-      }
-
-      // Find patient BEFORE async operations to ensure we have the data
-      const patient = patients.find(p => p.id === formData.patient_id);
-      const student = users.find(u => u.id === formData.student_id);
-      const supervisor = users.find(u => u.id === formData.supervisor_id);
-
-      if (!patient) {
-        console.error('Patient not found');
-        setLoading(false);
-        return;
-      }
-
-      await addDoc(collection(db, 'appointments'), {
-        ...formData,
-        patient_name: patient.name,
-        student_name: student?.name,
-        supervisor_name: supervisor?.name,
-        status: 'SCHEDULED'
-      });
-
-      // Update patient status
-      await updateDoc(doc(db, 'patients', formData.patient_id), {
-        status: 'AGUARDANDO_CONSULTA'
-      });
-
-      // Set scheduled data for success screen
-      setScheduledData({
-        patientName: patient.name,
-        date: formData.date,
-        time: formData.time,
-        phone: patient.phone || ''
-      });
-      
-    } catch (err) {
-      console.error(err);
-      // Only close if there was an error that we can't recover from easily, 
-      // or maybe show error message. For now, let's keep it open so user can retry.
-    } finally {
+    if (existingAppointmentsCount >= 2) {
+      setError('Este horário já possui 2 agendamentos. Por favor, escolha outro horário.');
       setLoading(false);
+      return;
     }
+
+    const patient = patients.find(p => p.id === formData.patient_id);
+    const student = users.find(u => u.id === formData.student_id);
+    const supervisor = users.find(u => u.id === formData.supervisor_id);
+
+    if (!patient) {
+      setError('Paciente não encontrado');
+      setLoading(false);
+      return;
+    }
+
+    const newAppointment: Appointment = {
+      id: generateId(),
+      ...formData,
+      patient_name: patient.name,
+      student_name: student?.name || '',
+      supervisor_name: supervisor?.name || '',
+      status: 'SCHEDULED'
+    };
+
+    setAppointments([...appointments, newAppointment]);
+
+    // Update patient status
+    setPatients(patients.map(p => 
+      p.id === formData.patient_id ? { ...p, status: 'AGUARDANDO_CONSULTA' } : p
+    ));
+
+    setScheduledData({
+      patientName: patient.name,
+      date: formData.date,
+      time: formData.time,
+      phone: patient.phone || ''
+    });
+    
+    setLoading(false);
   };
 
   if (scheduledData) {
@@ -932,7 +887,7 @@ function SchedulingView({ patients, users, settings, appointments, onComplete }:
   );
 }
 
-function MyAppointmentsView({ user, appointments, settings, onUpdate }: { user: User, appointments: Appointment[], settings: ClinicSettings, onUpdate: () => void }) {
+function MyAppointmentsView({ user, appointments, setAppointments, patients, setPatients, evolutions, setEvolutions, settings, onUpdate }: { user: User, appointments: Appointment[], setAppointments: React.Dispatch<React.SetStateAction<Appointment[]>>, patients: Patient[], setPatients: React.Dispatch<React.SetStateAction<Patient[]>>, evolutions: Evolution[], setEvolutions: React.Dispatch<React.SetStateAction<Evolution[]>>, settings: ClinicSettings, onUpdate: () => void }) {
   const filteredAppointments = useMemo(() => {
     if (user.role === 'ADMIN' || user.role === 'PROFESSOR') return appointments;
     return appointments.filter(a => a.student_id === user.id);
@@ -945,43 +900,25 @@ function MyAppointmentsView({ user, appointments, settings, onUpdate }: { user: 
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [processingAction, setProcessingAction] = useState(false);
   const [error, setError] = useState('');
-  const [evolutionData, setEvolutionData] = useState<Evolution | null>(null);
 
-  const handleUpdateStatus = async (id: string, status: 'ATTENDED' | 'MISSED') => {
+  const handleUpdateStatus = (id: string, status: 'ATTENDED' | 'MISSED') => {
     setUpdatingId(id);
-    try {
-      const appRef = doc(db, 'appointments', id);
-      await updateDoc(appRef, { status });
-      onUpdate();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setUpdatingId(null);
-    }
+    setAppointments(appointments.map(a => a.id === id ? { ...a, status } : a));
+    setUpdatingId(null);
+    onUpdate();
   };
 
-  const handleFinalize = async (type: 'ALTA' | 'DESISTENCIA') => {
+  const handleFinalize = (type: 'ALTA' | 'DESISTENCIA') => {
     if (!selectedAppointment) return;
     setProcessingAction(true);
-    try {
-      const appRef = doc(db, 'appointments', selectedAppointment.id);
-      const appSnap = await getDoc(appRef);
-      
-      // Update appointment status to reflect the final decision
-      await updateDoc(appRef, { status: type });
-
-      if (appSnap.exists()) {
-        const patientId = appSnap.data().patient_id;
-        await updateDoc(doc(db, 'patients', patientId), { status: type });
-      }
-      onUpdate();
-      setSelectedAppointment(null);
-      setActionType(null);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setProcessingAction(false);
-    }
+    
+    setAppointments(appointments.map(a => a.id === selectedAppointment.id ? { ...a, status: type } : a));
+    setPatients(patients.map(p => p.id === selectedAppointment.patient_id ? { ...p, status: type } : p));
+    
+    onUpdate();
+    setSelectedAppointment(null);
+    setActionType(null);
+    setProcessingAction(false);
   };
 
   const [scheduledData, setScheduledData] = useState<{
@@ -991,70 +928,56 @@ function MyAppointmentsView({ user, appointments, settings, onUpdate }: { user: 
     phone: string;
   } | null>(null);
 
-  const handleScheduleNext = async (e: React.FormEvent) => {
+  const handleScheduleNext = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedAppointment) return;
     setProcessingAction(true);
     setError('');
-    try {
-      // Check for available slots (max 2 per time)
-      const existingAppointments = appointments.filter(
-        a => a.date === nextDate && a.time === nextTime && a.status === 'SCHEDULED'
-      );
+    
+    // Check for available slots (max 2 per time)
+    const existingAppointmentsCount = appointments.filter(
+      a => a.date === nextDate && a.time === nextTime && a.status === 'SCHEDULED'
+    ).length;
 
-      if (existingAppointments.length >= 2) {
-        setError('Este horário já possui 2 agendamentos. Por favor, escolha outro horário.');
-        setProcessingAction(false);
-        return;
-      }
-
-      const appRef = doc(db, 'appointments', selectedAppointment.id);
-      const appSnap = await getDoc(appRef);
-      let patientPhone = '';
-      
-      if (appSnap.exists()) {
-         const patientId = appSnap.data().patient_id;
-         const patientRef = doc(db, 'patients', patientId);
-         const patientSnap = await getDoc(patientRef);
-         if (patientSnap.exists()) {
-             patientPhone = patientSnap.data().phone || '';
-         }
-      }
-
-      await addDoc(collection(db, 'appointments'), {
-        patient_id: selectedAppointment.patient_id,
-        patient_name: selectedAppointment.patient_name,
-        student_id: selectedAppointment.student_id,
-        student_name: selectedAppointment.student_name,
-        supervisor_id: selectedAppointment.supervisor_id,
-        supervisor_name: selectedAppointment.supervisor_name,
-        date: nextDate,
-        time: nextTime,
-        status: 'SCHEDULED'
-      });
-
-      await updateDoc(doc(db, 'patients', selectedAppointment.patient_id), {
-        status: 'AGUARDANDO_CONSULTA'
-      });
-
-      onUpdate();
-      
-      setScheduledData({
-        patientName: selectedAppointment.patient_name || '',
-        date: nextDate,
-        time: nextTime,
-        phone: patientPhone
-      });
-
-      setSelectedAppointment(null);
-      setActionType(null);
-      setNextDate('');
-      setNextTime('');
-    } catch (err) {
-      console.error(err);
-    } finally {
+    if (existingAppointmentsCount >= 2) {
+      setError('Este horário já possui 2 agendamentos. Por favor, escolha outro horário.');
       setProcessingAction(false);
+      return;
     }
+
+    const patient = patients.find(p => p.id === selectedAppointment.patient_id);
+    const patientPhone = patient?.phone || '';
+
+    const newAppointment: Appointment = {
+      id: generateId(),
+      patient_id: selectedAppointment.patient_id,
+      patient_name: selectedAppointment.patient_name,
+      student_id: selectedAppointment.student_id,
+      student_name: selectedAppointment.student_name,
+      supervisor_id: selectedAppointment.supervisor_id,
+      supervisor_name: selectedAppointment.supervisor_name,
+      date: nextDate,
+      time: nextTime,
+      status: 'SCHEDULED'
+    };
+
+    setAppointments([...appointments, newAppointment]);
+    setPatients(patients.map(p => p.id === selectedAppointment.patient_id ? { ...p, status: 'AGUARDANDO_CONSULTA' } : p));
+
+    onUpdate();
+    
+    setScheduledData({
+      patientName: selectedAppointment.patient_name || '',
+      date: nextDate,
+      time: nextTime,
+      phone: patientPhone
+    });
+
+    setSelectedAppointment(null);
+    setActionType(null);
+    setNextDate('');
+    setNextTime('');
+    setProcessingAction(false);
   };
 
   const getWhatsappUrl = () => {
@@ -1265,6 +1188,9 @@ function MyAppointmentsView({ user, appointments, settings, onUpdate }: { user: 
             <EvolutionForm 
               appointment={selectedAppointment}
               user={user}
+              evolutions={evolutions}
+              setEvolutions={setEvolutions}
+              patients={patients}
               onClose={() => { setSelectedAppointment(null); setActionType(null); }}
               onSave={() => {
                 onUpdate();
@@ -1311,46 +1237,26 @@ function MyAppointmentsView({ user, appointments, settings, onUpdate }: { user: 
   );
 }
 
-function PatientHistoryView({ patients, appointments, user, onBack }: { patients: Patient[], appointments: Appointment[], user: User, onBack: () => void }) {
+function PatientHistoryView({ patients, setPatients, appointments, setAppointments, evolutions, setEvolutions, user, onBack, settings }: { patients: Patient[], setPatients: React.Dispatch<React.SetStateAction<Patient[]>>, appointments: Appointment[], setAppointments: React.Dispatch<React.SetStateAction<Appointment[]>>, evolutions: Evolution[], setEvolutions: React.Dispatch<React.SetStateAction<Evolution[]>>, user: User, onBack: () => void, settings: ClinicSettings }) {
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
-  const [evolutions, setEvolutions] = useState<Evolution[]>([]);
-  const [loadingEvolutions, setLoadingEvolutions] = useState(false);
   const [selectedEvolution, setSelectedEvolution] = useState<Evolution | null>(null);
   const [feedback, setFeedback] = useState('');
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [isEditingPatient, setIsEditingPatient] = useState(false);
   const [editingPatientData, setEditingPatientData] = useState<Partial<Patient>>({});
-  const [settings, setSettings] = useState<ClinicSettings | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
-  useEffect(() => {
-    const fetchSettings = async () => {
-      const docSnap = await getDoc(doc(db, 'settings', 'clinic_schedule'));
-      if (docSnap.exists()) {
-        setSettings(docSnap.data() as ClinicSettings);
-      }
-    };
-    fetchSettings();
-  }, []);
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
   const patientAppointments = appointments
     .filter(a => a.patient_id === selectedPatientId)
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  useEffect(() => {
-    if (selectedPatientId) {
-      setLoadingEvolutions(true);
-      const q = query(collection(db, 'evolutions'), where('patient_id', '==', selectedPatientId));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const evs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Evolution));
-        setEvolutions(evs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-        setLoadingEvolutions(false);
-      });
-      return () => unsubscribe();
-    }
-  }, [selectedPatientId]);
+  const patientEvolutions = useMemo(() => {
+    return evolutions
+      .filter(ev => ev.patient_id === selectedPatientId)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [evolutions, selectedPatientId]);
 
   const stats = useMemo(() => {
     if (!selectedPatientId) return null;
@@ -1361,27 +1267,18 @@ function PatientHistoryView({ patients, appointments, user, onBack }: { patients
     };
   }, [patientAppointments, selectedPatientId]);
 
-  const handleApprove = async (evId: string) => {
-    try {
-      await updateDoc(doc(db, 'evolutions', evId), { status: 'APPROVED' });
-    } catch (err) {
-      console.error(err);
-    }
+  const handleApprove = (evId: string) => {
+    setEvolutions(evolutions.map(ev => ev.id === evId ? { ...ev, status: 'APPROVED' } : ev));
   };
 
-  const handleReject = async () => {
+  const handleReject = () => {
     if (!selectedEvolution || !feedback) return;
-    try {
-      await updateDoc(doc(db, 'evolutions', selectedEvolution.id), { 
-        status: 'REJECTED',
-        feedback: feedback
-      });
-      setShowFeedbackModal(false);
-      setFeedback('');
-      setSelectedEvolution(null);
-    } catch (err) {
-      console.error(err);
-    }
+    setEvolutions(evolutions.map(ev => 
+      ev.id === selectedEvolution.id ? { ...ev, status: 'REJECTED', feedback } : ev
+    ));
+    setShowFeedbackModal(false);
+    setFeedback('');
+    setSelectedEvolution(null);
   };
 
   const handleEditPatient = () => {
@@ -1390,47 +1287,31 @@ function PatientHistoryView({ patients, appointments, user, onBack }: { patients
     setIsEditingPatient(true);
   };
 
-  const handleSavePatient = async (e: React.FormEvent) => {
+  const handleSavePatient = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPatientId) return;
-    try {
-      await updateDoc(doc(db, 'patients', selectedPatientId), editingPatientData);
-      setIsEditingPatient(false);
-      alert('Dados do paciente atualizados com sucesso!');
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao atualizar paciente');
-    }
+    setPatients(patients.map(p => p.id === selectedPatientId ? { ...p, ...editingPatientData } : p));
+    setIsEditingPatient(false);
+    alert('Dados do paciente atualizados com sucesso!');
   };
 
-  const handleDeletePatient = async () => {
+  const handleDeletePatient = () => {
     if (!selectedPatientId) return;
     setIsDeleting(true);
-    try {
-      // 1. Delete appointments
-      const qApp = query(collection(db, 'appointments'), where('patient_id', '==', selectedPatientId));
-      const snapApp = await getDocs(qApp);
-      const deleteAppPromises = snapApp.docs.map(d => deleteDoc(doc(db, 'appointments', d.id)));
-      
-      // 2. Delete evolutions
-      const qEv = query(collection(db, 'evolutions'), where('patient_id', '==', selectedPatientId));
-      const snapEv = await getDocs(qEv);
-      const deleteEvPromises = snapEv.docs.map(d => deleteDoc(doc(db, 'evolutions', d.id)));
-      
-      await Promise.all([...deleteAppPromises, ...deleteEvPromises]);
-
-      // 3. Delete patient
-      await deleteDoc(doc(db, 'patients', selectedPatientId));
-      
-      setSelectedPatientId('');
-      setShowDeleteConfirm(false);
-      alert('Paciente e todo seu histórico foram excluídos com sucesso!');
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao excluir paciente: ' + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setIsDeleting(false);
-    }
+    
+    // 1. Delete appointments
+    setAppointments(appointments.filter(a => a.patient_id !== selectedPatientId));
+    
+    // 2. Delete evolutions
+    setEvolutions(evolutions.filter(ev => ev.patient_id !== selectedPatientId));
+    
+    // 3. Delete patient
+    setPatients(patients.filter(p => p.id !== selectedPatientId));
+    
+    setSelectedPatientId('');
+    setShowDeleteConfirm(false);
+    setIsDeleting(false);
+    alert('Paciente e todo seu histórico foram excluídos com sucesso!');
   };
 
   const handlePrint = (ev: Evolution) => {
@@ -1684,10 +1565,9 @@ function PatientHistoryView({ patients, appointments, user, onBack }: { patients
           <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
             <div className="p-4 border-b border-zinc-100 bg-zinc-50 flex justify-between items-center">
               <h3 className="font-bold text-zinc-900 text-sm uppercase tracking-wider">Evoluções Psicológicas</h3>
-              {loadingEvolutions && <span className="text-xs text-zinc-400 animate-pulse">Carregando...</span>}
             </div>
             <div className="p-6 space-y-6">
-              {evolutions.map(ev => (
+              {patientEvolutions.map(ev => (
                 <div key={ev.id} className="border border-zinc-100 rounded-xl p-4 space-y-4">
                   <div className="flex justify-between items-start">
                     <div>
@@ -1754,7 +1634,7 @@ function PatientHistoryView({ patients, appointments, user, onBack }: { patients
                   </div>
                 </div>
               ))}
-              {evolutions.length === 0 && !loadingEvolutions && (
+              {patientEvolutions.length === 0 && (
                 <p className="text-center text-zinc-500 py-8">Nenhuma evolução registrada para este paciente.</p>
               )}
             </div>
@@ -1828,50 +1708,37 @@ function PatientHistoryView({ patients, appointments, user, onBack }: { patients
   );
 }
 
-function EvolutionForm({ appointment, user, onClose, onSave }: { appointment: Appointment, user: User, onClose: () => void, onSave: () => void }) {
+function EvolutionForm({ appointment, user, evolutions, setEvolutions, patients, onClose, onSave }: { appointment: Appointment, user: User, evolutions: Evolution[], setEvolutions: React.Dispatch<React.SetStateAction<Evolution[]>>, patients: Patient[], onClose: () => void, onSave: () => void }) {
   const [formData, setFormData] = useState({
     synthesis: '',
     conduct: '',
     observations: ''
   });
   const [loading, setLoading] = useState(false);
-  const [patientData, setPatientData] = useState<Patient | null>(null);
+  const patientData = patients.find(p => p.id === appointment.patient_id);
 
-  useEffect(() => {
-    const fetchPatient = async () => {
-      const docRef = doc(db, 'patients', appointment.patient_id);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        setPatientData({ id: docSnap.id, ...docSnap.data() } as Patient);
-      }
-    };
-    fetchPatient();
-  }, [appointment.patient_id]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    try {
-      await addDoc(collection(db, 'evolutions'), {
-        appointment_id: appointment.id,
-        patient_id: appointment.patient_id,
-        patient_name: appointment.patient_name,
-        medical_record_number: patientData?.medical_record_number || '',
-        student_id: user.id,
-        student_name: user.name,
-        supervisor_id: appointment.supervisor_id,
-        supervisor_name: appointment.supervisor_name,
-        date: new Date().toISOString().split('T')[0],
-        ...formData,
-        status: 'PENDING'
-      });
-      onSave();
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao salvar evolução');
-    } finally {
-      setLoading(false);
-    }
+    
+    const newEvolution: Evolution = {
+      id: generateId(),
+      appointment_id: appointment.id,
+      patient_id: appointment.patient_id,
+      patient_name: appointment.patient_name,
+      medical_record_number: patientData?.medical_record_number || '',
+      student_id: user.id,
+      student_name: user.name,
+      supervisor_id: appointment.supervisor_id,
+      supervisor_name: appointment.supervisor_name,
+      date: new Date().toISOString().split('T')[0],
+      ...formData,
+      status: 'PENDING'
+    };
+
+    setEvolutions([...evolutions, newEvolution]);
+    setLoading(false);
+    onSave();
   };
 
   if (!patientData) return <div className="text-center py-8">Carregando dados do paciente...</div>;
@@ -1955,7 +1822,7 @@ function EvolutionForm({ appointment, user, onClose, onSave }: { appointment: Ap
   );
 }
 
-function SettingsView({ users, settings, onUpdate, onUpdateSettings }: { users: User[], settings: ClinicSettings, onUpdate: () => void, onUpdateSettings: (s: ClinicSettings) => void }) {
+function SettingsView({ users, setUsers, settings, onUpdate, onUpdateSettings }: { users: User[], setUsers: React.Dispatch<React.SetStateAction<User[]>>, settings: ClinicSettings, onUpdate: () => void, onUpdateSettings: (s: ClinicSettings) => void }) {
   const [formData, setFormData] = useState({
     name: '',
     registration: '',
@@ -1978,23 +1845,23 @@ function SettingsView({ users, settings, onUpdate, onUpdateSettings }: { users: 
     );
   }, [users, userFilter]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    try {
-      if (editingId) {
-        await updateDoc(doc(db, 'users', editingId), formData);
-        setEditingId(null);
-      } else {
-        await addDoc(collection(db, 'users'), formData);
-      }
-      setFormData({ name: '', registration: '', password: '', role: 'STUDENT' });
-      onUpdate();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
+    
+    if (editingId) {
+      setUsers(users.map(u => u.id === editingId ? { ...u, ...formData } : u));
+      setEditingId(null);
+    } else {
+      const newUser: User = {
+        id: generateId(),
+        ...formData
+      };
+      setUsers([...users, newUser]);
     }
+    setFormData({ name: '', registration: '', password: '', role: 'STUDENT' });
+    onUpdate();
+    setLoading(false);
   };
 
   const handleEditUser = (user: User) => {
@@ -2007,39 +1874,17 @@ function SettingsView({ users, settings, onUpdate, onUpdateSettings }: { users: 
     setEditingId(user.id);
   };
 
-  const handleDeleteUser = async (userId: string) => {
+  const handleDeleteUser = (userId: string) => {
     if (confirm('Tem certeza que deseja excluir este usuário?')) {
-      try {
-        const { deleteDoc } = await import('firebase/firestore');
-        await deleteDoc(doc(db, 'users', userId));
-        onUpdate();
-      } catch (err) {
-        console.error(err);
-        alert('Erro ao excluir usuário');
-      }
+      setUsers(users.filter(u => u.id !== userId));
+      onUpdate();
     }
   };
 
-  const handleSaveSchedule = async (e: React.FormEvent) => {
+  const handleSaveSchedule = (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      // Check document size before saving
-      const dataString = JSON.stringify(scheduleData);
-      const sizeInBytes = new Blob([dataString]).size;
-      const sizeInMB = sizeInBytes / (1024 * 1024);
-      
-      if (sizeInMB > 0.9) {
-        alert(`O tamanho total das imagens (${sizeInMB.toFixed(2)} MB) está muito próximo ou excede o limite de 1MB do banco de dados. Por favor, remova algumas imagens do carrossel ou tente novamente com imagens menores.`);
-        return;
-      }
-
-      await setDoc(doc(db, 'settings', 'clinic_schedule'), scheduleData);
-      onUpdateSettings(scheduleData);
-      alert('Configurações atualizadas com sucesso!');
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao atualizar configurações. O tamanho das imagens pode ter excedido o limite.');
-    }
+    onUpdateSettings(scheduleData);
+    alert('Configurações atualizadas com sucesso!');
   };
 
   const compressImage = (file: File, maxWidth: number, maxHeight: number): Promise<string> => {
@@ -2119,16 +1964,9 @@ function SettingsView({ users, settings, onUpdate, onUpdateSettings }: { users: 
     setScheduleData({ ...scheduleData, workDays: newDays });
   };
 
-  const handleToggleBlock = async (userId: string, currentStatus?: boolean) => {
-    try {
-      await updateDoc(doc(db, 'users', userId), {
-        blocked: !currentStatus
-      });
-      onUpdate();
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao atualizar status do usuário');
-    }
+  const handleToggleBlock = (userId: string, currentStatus?: boolean) => {
+    setUsers(users.map(u => u.id === userId ? { ...u, blocked: !currentStatus } : u));
+    onUpdate();
   };
 
   return (
@@ -2583,36 +2421,34 @@ function LandingView({ onNavigate, settings }: { onNavigate: (view: 'LOGIN' | 'R
   );
 }
 
-function PublicRegisterView({ onBack }: { onBack: () => void }) {
+function PublicRegisterView({ onBack, patients, setPatients }: { onBack: () => void, patients: Patient[], setPatients: React.Dispatch<React.SetStateAction<Patient[]>> }) {
   const [formData, setFormData] = useState({ name: '', birth_date: '', phone: '', email: '', cpf: '', address: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    try {
-      const q = query(collection(db, 'patients'), where('cpf', '==', formData.cpf));
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) {
-        setError('CPF já cadastrado em nosso sistema.');
-        setLoading(false);
-        return;
-      }
-      await addDoc(collection(db, 'patients'), {
-        ...formData,
-        medical_record_number: Math.floor(100000 + Math.random() * 900000).toString(),
-        status: 'TRIAGEM'
-      });
-      setSuccess(true);
-    } catch (err) {
-      console.error(err);
-      setError('Erro ao realizar cadastro. Tente novamente.');
-    } finally {
+    
+    const exists = patients.some(p => p.cpf === formData.cpf);
+    if (exists) {
+      setError('CPF já cadastrado em nosso sistema.');
       setLoading(false);
+      return;
     }
+
+    const newPatient: Patient = {
+      id: generateId(),
+      ...formData,
+      medical_record_number: Math.floor(100000 + Math.random() * 900000).toString(),
+      status: 'TRIAGEM'
+    };
+
+    setPatients([...patients, newPatient]);
+    setSuccess(true);
+    setLoading(false);
   };
 
   if (success) {
@@ -2674,45 +2510,31 @@ function PublicRegisterView({ onBack }: { onBack: () => void }) {
   );
 }
 
-function CheckAppointmentView({ onBack }: { onBack: () => void }) {
+function CheckAppointmentView({ onBack, patients, appointments }: { onBack: () => void, patients: Patient[], appointments: Appointment[] }) {
   const [cpf, setCpf] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<{ patient: Patient, appointment?: Appointment } | null>(null);
 
-  const handleCheck = async (e: React.FormEvent) => {
+  const handleCheck = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
     setResult(null);
-    try {
-      const qPatient = query(collection(db, 'patients'), where('cpf', '==', cpf));
-      const snapPatient = await getDocs(qPatient);
-      if (snapPatient.empty) {
-        setError('CPF não encontrado em nossa base de dados.');
-        setLoading(false);
-        return;
-      }
-      const patient = { id: snapPatient.docs[0].id, ...snapPatient.docs[0].data() } as Patient;
-      
-      const qApp = query(collection(db, 'appointments'), where('patient_id', '==', patient.id), where('status', '==', 'SCHEDULED'));
-      const snapApp = await getDocs(qApp);
-      
-      let appointment;
-      if (!snapApp.empty) {
-        // Get the closest upcoming appointment
-        const apps = snapApp.docs.map(d => ({ id: d.id, ...d.data() } as Appointment));
-        apps.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-        appointment = apps[0];
-      }
-
-      setResult({ patient, appointment });
-    } catch (err) {
-      console.error(err);
-      setError('Erro ao consultar. Tente novamente.');
-    } finally {
+    
+    const patient = patients.find(p => p.cpf === cpf);
+    if (!patient) {
+      setError('CPF não encontrado em nossa base de dados.');
       setLoading(false);
+      return;
     }
+    
+    const relevantApps = appointments.filter(a => a.patient_id === patient.id && a.status === 'SCHEDULED');
+    relevantApps.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const appointment = relevantApps[0];
+
+    setResult({ patient, appointment });
+    setLoading(false);
   };
 
   return (
@@ -2775,12 +2597,12 @@ function CheckAppointmentView({ onBack }: { onBack: () => void }) {
   );
 }
 
-function ChangePasswordModal({ user, onClose, onSuccess }: { user: User, onClose: () => void, onSuccess: () => void }) {
+function ChangePasswordModal({ user, users, setUsers, onClose, onSuccess }: { user: User, users: User[], setUsers: React.Dispatch<React.SetStateAction<User[]>>, onClose: () => void, onSuccess: () => void }) {
   const [passwords, setPasswords] = useState({ current: '', new: '', confirm: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -2795,30 +2617,18 @@ function ChangePasswordModal({ user, onClose, onSuccess }: { user: User, onClose
     }
 
     setLoading(true);
-    try {
-      // First verify current password
-      const userDoc = await getDoc(doc(db, 'users', user.id));
-      if (!userDoc.exists()) throw new Error('Usuário não encontrado');
-      
-      const userData = userDoc.data();
-      if (userData.password !== passwords.current) {
-        setError('Senha atual incorreta');
-        setLoading(false);
-        return;
-      }
-
-      // Update password
-      await updateDoc(doc(db, 'users', user.id), {
-        password: passwords.new
-      });
-      
-      onSuccess();
-    } catch (err) {
-      console.error(err);
-      setError('Erro ao alterar senha');
-    } finally {
+    
+    // Verify current password
+    if ((user as any).password !== passwords.current) {
+      setError('Senha atual incorreta');
       setLoading(false);
+      return;
     }
+
+    // Update password in local state
+    setUsers(users.map(u => u.id === user.id ? { ...u, password: passwords.new } : u));
+    setLoading(false);
+    onSuccess();
   };
 
   return (
