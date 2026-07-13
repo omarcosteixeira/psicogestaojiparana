@@ -162,13 +162,26 @@ export default function App() {
   useEffect(() => {
     const initAdmin = async () => {
       try {
-        const q = query(collection(db, 'users'), where('registration', '==', 'admin@estacio.br'));
-        const snapshot = await getDocs(q);
-        if (snapshot.empty) {
+        // Check for default admin
+        const q1 = query(collection(db, 'users'), where('registration', '==', 'admin@estacio.br'));
+        const snapshot1 = await getDocs(q1);
+        if (snapshot1.empty) {
           await addDoc(collection(db, 'users'), {
             name: 'Administrador Sistema',
             registration: 'admin@estacio.br',
             password: '91931324',
+            role: 'ADMIN'
+          });
+        }
+
+        // Check for requested admin
+        const q2 = query(collection(db, 'users'), where('registration', '==', 'canaldonutri@gmail.com'));
+        const snapshot2 = await getDocs(q2);
+        if (snapshot2.empty) {
+          await addDoc(collection(db, 'users'), {
+            name: 'Administrador Geral',
+            registration: 'canaldonutri@gmail.com',
+            password: '22130302aR@',
             role: 'ADMIN'
           });
         }
