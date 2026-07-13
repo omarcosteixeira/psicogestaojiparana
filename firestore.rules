@@ -1,0 +1,18 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // AVISO DE SEGURANÇA:
+    // O sistema atual utiliza uma implementação de login personalizada consultando a coleção 'users'.
+    // Como não estamos usando o Firebase Authentication nativo para gerenciar sessões,
+    // as regras de segurança não conseguem verificar 'request.auth'.
+    // Para que o sistema funcione 100% (login, cadastro, agendamentos), 
+    // precisamos permitir acesso público.
+    
+    // Em um ambiente de produção real, é altamente recomendado migrar para 
+    // Firebase Authentication e restringir estas regras.
+
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

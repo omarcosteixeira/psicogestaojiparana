@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Clinica Escola de Psicologia Ji-Paraná",
+  "description": "Sistema de gestão para clínica escola de psicologia com fluxos de triagem, agendamento e atendimento.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
