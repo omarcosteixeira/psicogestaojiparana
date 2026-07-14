@@ -20,6 +20,7 @@ import {
   Edit2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import * as XLSX from 'xlsx';
 import { User, Patient, Appointment, UserRole, PatientStatus, ClinicSettings, Evolution, EvolutionStatus } from './types';
 import { db } from './firebase';
 import { 
@@ -142,7 +143,8 @@ export default function App() {
         name: 'Administrador Sistema',
         registration: 'admin@estacio.br',
         password: '91931324',
-        role: 'ADMIN'
+        role: 'ADMIN',
+        passwordChanged: true
       });
     }
 
@@ -151,7 +153,8 @@ export default function App() {
         name: 'Administrador Geral',
         registration: 'canaldonutri@gmail.com',
         password: '22130302aR@',
-        role: 'ADMIN'
+        role: 'ADMIN',
+        passwordChanged: true
       });
     }
 
@@ -179,6 +182,10 @@ export default function App() {
     if (foundUser) {
       if (foundUser.blocked) {
         setError('Acesso bloqueado. Contate o administrador.');
+      } else if (!foundUser.passwordChanged) {
+        // Force password change
+        setUser(foundUser);
+        setShowChangePassword(true);
       } else {
         setUser(foundUser);
       }
@@ -1913,7 +1920,8 @@ function SettingsView({ users, setUsers, settings, onUpdate, onUpdateSettings }:
         });
     } else {
       const newUser: Omit<User, 'id'> = {
-        ...formData
+        ...formData,
+        passwordChanged: false
       };
       addDoc(collection(db, 'users'), newUser)
         .then(() => {
@@ -1922,6 +1930,47 @@ function SettingsView({ users, setUsers, settings, onUpdate, onUpdateSettings }:
           setLoading(false);
         });
     }
+  };
+
+  const handleImportExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const bstr = event.target?.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const wsname = wb.SheetNames[0];
+      const ws = wb.Sheets[wsname];
+      const data = XLSX.utils.sheet_to_json(ws);
+
+      data.forEach((row: any) => {
+        const name = row['nome'] || row['Nome'];
+        const registration = row['matrícula'] || row['Matrícula'] || row['matricula'] || row['Matricula'];
+        const roleStr = row['Tipo de Acesso'] || row['tipo de acesso'] || row['acesso'] || row['Acesso'];
+        
+        let role: UserRole = 'STUDENT';
+        const roleLower = roleStr?.toString().toLowerCase() || '';
+        if (roleLower.includes('administrador')) role = 'ADMIN';
+        else if (roleLower.includes('professor') || roleLower.includes('supervisor')) role = 'PROFESSOR';
+        else if (roleLower.includes('atendente clinica') || roleLower.includes('atendente clínica')) role = 'STUDENT_CLINIC';
+        else if (roleLower.includes('atendente')) role = 'STUDENT';
+
+        if (name && registration) {
+          addDoc(collection(db, 'users'), {
+            name,
+            registration: registration.toString(),
+            password: '123456',
+            role,
+            passwordChanged: false
+          });
+        }
+      });
+      alert('Importação concluída! Os usuários foram adicionados.');
+      onUpdate();
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = '';
   };
 
   const handleEditUser = (user: User) => {
@@ -2039,7 +2088,25 @@ function SettingsView({ users, setUsers, settings, onUpdate, onUpdateSettings }:
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* User Registration */}
         <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
-          <h3 className="font-bold text-zinc-900 mb-6">{editingId ? 'Editar Usuário' : 'Cadastrar Usuário'}</h3>
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="font-bold text-zinc-900">{editingId ? 'Editar Usuário' : 'Cadastrar Usuário'}</h3>
+            <div className="relative">
+              <input
+                type="file"
+                accept=".xlsx, .xls"
+                onChange={handleImportExcel}
+                className="hidden"
+                id="excel-import"
+              />
+              <label
+                htmlFor="excel-import"
+                className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100 transition-colors cursor-pointer border border-green-200"
+              >
+                <ClipboardList size={16} />
+                Importar Excel
+              </label>
+            </div>
+          </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Nome Completo</label>
@@ -2691,7 +2758,10 @@ function ChangePasswordModal({ user, users, setUsers, onClose, onSuccess }: { us
     }
 
     // Update password in Firestore
-    updateDoc(doc(db, 'users', user.id), { password: passwords.new })
+    updateDoc(doc(db, 'users', user.id), { 
+      password: passwords.new,
+      passwordChanged: true 
+    })
       .then(() => {
         setLoading(false);
         onSuccess();
@@ -2755,14 +2825,16 @@ function ChangePasswordModal({ user, users, setUsers, onClose, onSuccess }: { us
             >
               {loading ? 'Alterando...' : 'Alterar Senha'}
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={loading}
-              className="px-4 py-2 border border-zinc-300 text-zinc-600 rounded-lg font-bold hover:bg-zinc-50 transition-colors disabled:opacity-50"
-            >
-              Cancelar
-            </button>
+            {user.passwordChanged && (
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={loading}
+                className="px-4 py-2 border border-zinc-300 text-zinc-600 rounded-lg font-bold hover:bg-zinc-50 transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            )}
           </div>
         </form>
       </motion.div>

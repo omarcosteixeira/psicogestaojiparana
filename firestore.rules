@@ -11,10 +11,7 @@ service cloud.firestore {
     // Regras para Usuários
     match /users/{userId} {
       allow read: if true;
-      allow write: if isString(request.resource.data.name) && 
-                      isString(request.resource.data.registration) &&
-                      isString(request.resource.data.role) &&
-                      isString(request.resource.data.password);
+      allow write: if true; 
     }
 
     // Regras para Pacientes

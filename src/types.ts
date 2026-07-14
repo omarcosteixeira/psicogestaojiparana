@@ -4,6 +4,8 @@ export interface User {
   id: string;
   name: string;
   registration: string;
+  password?: string;
+  passwordChanged?: boolean;
   role: UserRole;
   blocked?: boolean;
 }
