@@ -17,7 +17,8 @@ import {
   MessageCircle,
   LayoutDashboard,
   Trash2,
-  Edit2
+  Edit2,
+  Printer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -42,6 +43,15 @@ const ROLES: Record<UserRole, string> = {
   PROFESSOR: 'Professor/Supervisor',
   STUDENT_CLINIC: 'Atendente Clínica',
   STUDENT: 'Atendente'
+};
+
+const formatDate = (dateStr: string) => {
+  if (!dateStr) return '';
+  if (dateStr.includes('T')) {
+    dateStr = dateStr.split('T')[0];
+  }
+  const [year, month, day] = dateStr.split('-');
+  return `${day}/${month}/${year}`;
 };
 
 const PATIENT_STATUS_LABELS: Record<PatientStatus, string> = {
@@ -791,7 +801,7 @@ function SchedulingView({ patients, users, settings, appointments, setAppointmen
     const message = encodeURIComponent(
       template
         .replace('{paciente}', scheduledData.patientName)
-        .replace('{data}', new Date(scheduledData.date).toLocaleDateString('pt-BR'))
+        .replace('{data}', formatDate(scheduledData.date))
         .replace('{hora}', scheduledData.time)
     );
     const whatsappUrl = `https://wa.me/55${phone}?text=${message}`;
@@ -1031,20 +1041,45 @@ function MyAppointmentsView({ user, appointments, setAppointments, patients, set
     const message = encodeURIComponent(
       template
         .replace('{paciente}', scheduledData.patientName)
-        .replace('{data}', new Date(scheduledData.date).toLocaleDateString('pt-BR'))
+        .replace('{data}', formatDate(scheduledData.date))
         .replace('{hora}', scheduledData.time)
     );
     return `https://wa.me/55${phone}?text=${message}`;
   };
 
+  const sortedAppointments = useMemo(() => {
+    return [...filteredAppointments].sort((a, b) => {
+      const dateCompare = new Date(b.date).getTime() - new Date(a.date).getTime();
+      if (dateCompare !== 0) return dateCompare;
+      return b.time.localeCompare(a.time);
+    });
+  }, [filteredAppointments]);
+
+  const upcomingAppointments = sortedAppointments.filter(a => a.status === 'SCHEDULED');
+  const pastAppointments = sortedAppointments.filter(a => a.status !== 'SCHEDULED');
+
+  const [showHistory, setShowHistory] = useState(false);
+
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold text-zinc-900">Minhas Consultas</h1>
-        <p className="text-zinc-500">Gerencie seus atendimentos e presenças.</p>
+      <header className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-zinc-900">Minhas Consultas</h1>
+          <p className="text-zinc-500">Gerencie seus atendimentos e presenças.</p>
+        </div>
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="flex items-center gap-2 px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors font-medium"
+        >
+          {showHistory ? 'Ocultar Histórico' : 'Ver Histórico Completo'}
+        </button>
       </header>
 
+      {/* Upcoming Appointments */}
       <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+        <div className="p-4 border-b border-zinc-100 bg-zinc-50">
+          <h3 className="font-bold text-zinc-900 text-sm uppercase tracking-wider">Consultas Agendadas</h3>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead className="bg-zinc-50 text-zinc-500 text-[10px] uppercase tracking-wider font-bold">
@@ -1052,78 +1087,127 @@ function MyAppointmentsView({ user, appointments, setAppointments, patients, set
                 <th className="px-6 py-3">Paciente</th>
                 <th className="px-6 py-3">Data/Hora</th>
                 <th className="px-6 py-3">Supervisor</th>
-                <th className="px-6 py-3">Status</th>
                 <th className="px-6 py-3">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
-              {filteredAppointments.map(app => (
+              {upcomingAppointments.map(app => (
                 <tr key={app.id} className="hover:bg-zinc-50 transition-colors">
                   <td className="px-6 py-4 text-sm font-medium text-zinc-900">{app.patient_name}</td>
                   <td className="px-6 py-4 text-sm text-zinc-600">
-                    {new Date(app.date).toLocaleDateString('pt-BR')} às {app.time}
+                    {formatDate(app.date)} às {app.time}
                   </td>
                   <td className="px-6 py-4 text-sm text-zinc-600">{app.supervisor_name}</td>
                   <td className="px-6 py-4">
-                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${
-                      app.status === 'SCHEDULED' ? 'bg-blue-100 text-blue-800' :
-                      app.status === 'ATTENDED' ? 'bg-green-100 text-green-800' :
-                      app.status === 'MISSED' ? 'bg-red-100 text-red-800' :
-                      app.status === 'ALTA' ? 'bg-purple-100 text-purple-800' :
-                      app.status === 'DESISTENCIA' ? 'bg-gray-100 text-gray-800' :
-                      'bg-gray-100 text-gray-800'
-                    }`}>
-                      {app.status === 'SCHEDULED' ? 'Agendado' :
-                       app.status === 'ATTENDED' ? 'Realizado' :
-                       app.status === 'MISSED' ? 'Falta' :
-                       app.status === 'ALTA' ? 'Alta' :
-                       app.status === 'DESISTENCIA' ? 'Desistência' : 'Cancelado'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    {app.status === 'SCHEDULED' && (
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleUpdateStatus(app.id, 'ATTENDED')}
-                          disabled={updatingId === app.id}
-                          className={`px-3 py-1 bg-green-100 text-green-700 rounded-lg text-xs font-bold hover:bg-green-200 ${updatingId === app.id ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        >
-                          {updatingId === app.id ? '...' : 'Confirmar Presença'}
-                        </button>
-                        <button
-                          onClick={() => handleUpdateStatus(app.id, 'MISSED')}
-                          disabled={updatingId === app.id}
-                          className={`px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-bold hover:bg-red-200 ${updatingId === app.id ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        >
-                          {updatingId === app.id ? '...' : 'Falta'}
-                        </button>
-                      </div>
-                    )}
-                    {(app.status === 'ATTENDED' || app.status === 'MISSED') && (
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => { setSelectedAppointment(app); setActionType('FINALIZE'); }}
-                          className="px-3 py-1 bg-zinc-100 text-zinc-700 rounded-lg text-xs font-bold hover:bg-zinc-200"
-                        >
-                          Finalizar / Próximos Passos
-                        </button>
-                        {app.status === 'ATTENDED' && (
-                          <button
-                            onClick={() => { setSelectedAppointment(app); setActionType('EVOLUTION'); }}
-                            className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-200"
-                          >
-                            Evolução
-                          </button>
-                        )}
-                      </div>
-                    )}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleUpdateStatus(app.id, 'ATTENDED')}
+                        disabled={updatingId === app.id}
+                        className={`px-3 py-1 bg-green-100 text-green-700 rounded-lg text-xs font-bold hover:bg-green-200 ${updatingId === app.id ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        {updatingId === app.id ? '...' : 'Confirmar Presença'}
+                      </button>
+                      <button
+                        onClick={() => handleUpdateStatus(app.id, 'MISSED')}
+                        disabled={updatingId === app.id}
+                        className={`px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-bold hover:bg-red-200 ${updatingId === app.id ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        {updatingId === app.id ? '...' : 'Falta'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
+              {upcomingAppointments.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-zinc-500">
+                    Nenhuma consulta agendada no momento.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* History Section */}
+      <AnimatePresence>
+        {showHistory && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-zinc-100 bg-zinc-50">
+                <h3 className="font-bold text-zinc-900 text-sm uppercase tracking-wider">Histórico de Atendimentos</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-zinc-50 text-zinc-500 text-[10px] uppercase tracking-wider font-bold">
+                    <tr>
+                      <th className="px-6 py-3">Paciente</th>
+                      <th className="px-6 py-3">Data/Hora</th>
+                      <th className="px-6 py-3">Status</th>
+                      <th className="px-6 py-3">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100">
+                    {pastAppointments.map(app => (
+                      <tr key={app.id} className="hover:bg-zinc-50 transition-colors">
+                        <td className="px-6 py-4 text-sm font-medium text-zinc-900">{app.patient_name}</td>
+                        <td className="px-6 py-4 text-sm text-zinc-600">
+                          {formatDate(app.date)} às {app.time}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${
+                            app.status === 'ATTENDED' ? 'bg-green-100 text-green-800' :
+                            app.status === 'MISSED' ? 'bg-red-100 text-red-800' :
+                            app.status === 'ALTA' ? 'bg-purple-100 text-purple-800' :
+                            app.status === 'DESISTENCIA' ? 'bg-gray-100 text-gray-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {app.status === 'ATTENDED' ? 'Realizado' :
+                             app.status === 'MISSED' ? 'Falta' :
+                             app.status === 'ALTA' ? 'Alta' :
+                             app.status === 'DESISTENCIA' ? 'Desistência' : 'Cancelado'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => { setSelectedAppointment(app); setActionType('FINALIZE'); }}
+                              className="px-3 py-1 bg-zinc-100 text-zinc-700 rounded-lg text-xs font-bold hover:bg-zinc-200"
+                            >
+                              Agendar Próxima
+                            </button>
+                            {app.status === 'ATTENDED' && (
+                              <button
+                                onClick={() => { setSelectedAppointment(app); setActionType('EVOLUTION'); }}
+                                className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-200"
+                              >
+                                Evolução
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {pastAppointments.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-8 text-center text-zinc-500">
+                          Nenhum histórico disponível.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Modal for Finalizing */}
       {selectedAppointment && actionType === 'FINALIZE' && (
@@ -1402,7 +1486,7 @@ function PatientHistoryView({ patients, setPatients, appointments, setAppointmen
           <div class="grid">
             <div><span class="label">Prontuário:</span><br/>${ev.medical_record_number}</div>
             <div><span class="label">Paciente:</span><br/>${ev.patient_name}</div>
-            <div><span class="label">Data:</span><br/>${new Date(ev.date).toLocaleDateString('pt-BR')}</div>
+            <div><span class="label">Data:</span><br/>${formatDate(ev.date)}</div>
             <div><span class="label">Atendente:</span><br/>${ev.student_name}</div>
           </div>
           <div class="section">
@@ -1431,6 +1515,102 @@ function PatientHistoryView({ patients, setPatients, appointments, setAppointmen
     printWindow.document.close();
   };
 
+  const handlePrintFullRecord = () => {
+    if (!selectedPatient) return;
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
+    const logoHtml = settings?.logoUrl 
+      ? `<div style="text-align: center; margin-bottom: 20px;"><img src="${settings.logoUrl}" style="max-height: 80px;" /></div>`
+      : '';
+
+    const appointmentsHtml = patientAppointments.map(app => `
+      <tr>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">${formatDate(app.date)}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">${app.time}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">${app.status === 'ATTENDED' ? 'Compareceu' : app.status === 'MISSED' ? 'Faltou' : app.status}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">${app.student_name}</td>
+      </tr>
+    `).join('');
+
+    const evolutionsHtml = patientEvolutions.map(ev => `
+      <div style="margin-bottom: 30px; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px;">
+          <span style="font-weight: bold;">Data: ${formatDate(ev.date)}</span>
+          <span>Atendente: ${ev.student_name}</span>
+        </div>
+        <div style="margin-bottom: 10px;">
+          <div style="font-size: 11px; font-weight: bold; color: #666; text-transform: uppercase;">Síntese da Escuta</div>
+          <div style="white-space: pre-wrap;">${ev.synthesis}</div>
+        </div>
+        <div style="margin-bottom: 10px;">
+          <div style="font-size: 11px; font-weight: bold; color: #666; text-transform: uppercase;">Conduta</div>
+          <div style="white-space: pre-wrap;">${ev.conduct}</div>
+        </div>
+        <div>
+          <div style="font-size: 11px; font-weight: bold; color: #666; text-transform: uppercase;">Observações</div>
+          <div style="white-space: pre-wrap;">${ev.observations}</div>
+        </div>
+      </div>
+    `).join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Prontuário Completo - ${selectedPatient.name}</title>
+          <style>
+            body { font-family: sans-serif; padding: 40px; line-height: 1.4; color: #333; }
+            .header { text-align: center; border-bottom: 2px solid #333; margin-bottom: 20px; padding-bottom: 10px; }
+            .patient-info { background: #f9f9f9; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+            h2 { border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 30px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            @media print { .no-print { display: none; } }
+          </style>
+        </head>
+        <body>
+          ${logoHtml}
+          <div class="header">
+            <h1>PRONTUÁRIO PSICOLÓGICO CONSOLIDADO</h1>
+            <p>Clinica Escola de Psicologia Ji-Paraná</p>
+          </div>
+          
+          <div class="patient-info">
+            <div><strong>Paciente:</strong> ${selectedPatient.name}</div>
+            <div><strong>Prontuário:</strong> ${selectedPatient.medical_record_number}</div>
+            <div><strong>CPF:</strong> ${selectedPatient.cpf}</div>
+            <div><strong>Data de Nascimento:</strong> ${formatDate(selectedPatient.birth_date)}</div>
+            <div><strong>Telefone:</strong> ${selectedPatient.phone}</div>
+            <div><strong>Status Atual:</strong> ${selectedPatient.status}</div>
+          </div>
+
+          <h2>Histórico de Agendamentos</h2>
+          <table>
+            <thead style="background: #eee;">
+              <tr>
+                <th style="padding: 8px; text-align: left;">Data</th>
+                <th style="padding: 8px; text-align: left;">Hora</th>
+                <th style="padding: 8px; text-align: left;">Status</th>
+                <th style="padding: 8px; text-align: left;">Atendente</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${appointmentsHtml || '<tr><td colspan="4" style="text-align: center; padding: 20px;">Nenhum agendamento encontrado</td></tr>'}
+            </tbody>
+          </table>
+
+          <h2>Evoluções Psicológicas</h2>
+          ${evolutionsHtml || '<p style="text-align: center; padding: 20px;">Nenhuma evolução registrada</p>'}
+
+          <div style="margin-top: 50px; text-align: center;">
+            <p>Documento gerado em ${new Date().toLocaleString('pt-BR')}</p>
+          </div>
+          <script>window.print();</script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between">
@@ -1445,6 +1625,13 @@ function PatientHistoryView({ patients, setPatients, appointments, setAppointmen
         </div>
         {selectedPatient && (user.role === 'ADMIN' || user.role === 'PROFESSOR' || user.role === 'STUDENT_CLINIC') && (
           <div className="flex gap-2">
+            <button 
+              onClick={handlePrintFullRecord}
+              className="flex items-center gap-2 px-4 py-2 bg-green-50 text-green-700 rounded-lg font-bold hover:bg-green-100 transition-colors"
+            >
+              <Printer size={18} />
+              Imprimir Prontuário Completo
+            </button>
             <button 
               onClick={handleEditPatient}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg font-bold hover:bg-indigo-100 transition-colors"
@@ -1589,7 +1776,7 @@ function PatientHistoryView({ patients, setPatients, appointments, setAppointmen
               <tbody className="divide-y divide-zinc-100">
                 {patientAppointments.map(app => (
                   <tr key={app.id}>
-                    <td className="px-6 py-4 text-sm text-zinc-900">{new Date(app.date).toLocaleDateString('pt-BR')}</td>
+                    <td className="px-6 py-4 text-sm text-zinc-900">{formatDate(app.date)}</td>
                     <td className="px-6 py-4 text-sm text-zinc-600">{app.time}</td>
                     <td className="px-6 py-4">
                       <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${
@@ -1628,7 +1815,7 @@ function PatientHistoryView({ patients, setPatients, appointments, setAppointmen
                 <div key={ev.id} className="border border-zinc-100 rounded-xl p-4 space-y-4">
                   <div className="flex justify-between items-start">
                     <div>
-                      <p className="text-sm font-bold text-zinc-900">{new Date(ev.date).toLocaleDateString('pt-BR')}</p>
+                      <p className="text-sm font-bold text-zinc-900">{formatDate(ev.date)}</p>
                       <p className="text-xs text-zinc-500">Atendente: {ev.student_name} | Supervisor: {ev.supervisor_name}</p>
                     </div>
                     <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${
@@ -2705,7 +2892,7 @@ function CheckAppointmentView({ onBack, patients, appointments }: { onBack: () =
                 <div className="bg-white p-4 rounded-lg border border-zinc-200 space-y-2">
                   <div className="flex items-center gap-2 text-zinc-700">
                     <Calendar className="w-4 h-4 text-indigo-600" />
-                    <span className="font-medium">{new Date(result.appointment.date + 'T00:00:00').toLocaleDateString('pt-BR')}</span>
+                    <span className="font-medium">{formatDate(result.appointment.date)}</span>
                   </div>
                   <div className="flex items-center gap-2 text-zinc-700">
                     <Clock className="w-4 h-4 text-indigo-600" />
