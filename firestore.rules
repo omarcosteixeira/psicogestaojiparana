@@ -34,6 +34,7 @@ service cloud.firestore {
                       isString(request.resource.data.date) &&
                       isString(request.resource.data.time) &&
                       isString(request.resource.data.status);
+      allow delete: if true;
     }
 
     // Regras para Evoluções
@@ -42,6 +43,7 @@ service cloud.firestore {
       allow write: if isString(request.resource.data.patient_id) &&
                       isString(request.resource.data.student_id) &&
                       isString(request.resource.data.status);
+      allow delete: if true;
     }
 
     // Regras para Configurações
