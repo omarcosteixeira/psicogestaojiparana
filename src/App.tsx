@@ -86,6 +86,7 @@ export default function App() {
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [publicView, setPublicView] = useState<'LANDING' | 'LOGIN' | 'REGISTER' | 'CHECK'>('LANDING');
 
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [settings, setSettings] = useState<ClinicSettings>({
     workDays: [1, 2, 3, 4, 5],
@@ -101,6 +102,7 @@ export default function App() {
     });
     const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User)));
+      setInitialLoadDone(true);
     });
     const unsubAppointments = onSnapshot(collection(db, 'appointments'), (snapshot) => {
       setAppointments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Appointment)));
@@ -128,9 +130,9 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Initialize Admin User in Firestore if not exists
+  // Initialize Admin User and Settings in Firestore if not exists
   useEffect(() => {
-    if (users.length === 0) return; // Wait for initial load
+    if (!initialLoadDone) return;
 
     const adminExists = users.some(u => u.registration === 'admin@estacio.br');
     const requestedAdminExists = users.some(u => u.registration === 'canaldonutri@gmail.com');
@@ -152,7 +154,20 @@ export default function App() {
         role: 'ADMIN'
       });
     }
-  }, [users]);
+
+    // Initialize settings
+    const settingsDocRef = doc(db, 'settings', 'clinic');
+    getDoc(settingsDocRef).then((docSnap) => {
+      if (!docSnap.exists()) {
+        setDoc(settingsDocRef, {
+          workDays: [1, 2, 3, 4, 5],
+          startTime: '08:00',
+          endTime: '18:00',
+          interval: 60
+        });
+      }
+    });
+  }, [initialLoadDone, users]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
