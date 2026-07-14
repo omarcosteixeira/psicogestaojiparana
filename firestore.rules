@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Funções auxiliares para verificar tipos
+    function isString(val) { return val is string; }
+    function isInt(val) { return val is int; }
+    function isBool(val) { return val is bool; }
+    function isList(val) { return val is list; }
+
+    // Regras para Usuários
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isString(request.resource.data.name) && 
+                      isString(request.resource.data.registration) &&
+                      isString(request.resource.data.role) &&
+                      isString(request.resource.data.password);
+    }
+
+    // Regras para Pacientes
+    match /patients/{patientId} {
+      allow read: if true;
+      // Públicos podem criar paciente em TRIAGEM
+      allow create: if isString(request.resource.data.name) && 
+                       isString(request.resource.data.cpf) &&
+                       request.resource.data.status == 'TRIAGEM';
+      // Atualizações exigem campos válidos
+      allow update: if isString(request.resource.data.name) && 
+                       isString(request.resource.data.status);
+      allow delete: if true; 
+    }
+
+    // Regras para Agendamentos
+    match /appointments/{appointmentId} {
+      allow read: if true;
+      allow write: if isString(request.resource.data.patient_id) &&
+                      isString(request.resource.data.date) &&
+                      isString(request.resource.data.time) &&
+                      isString(request.resource.data.status);
+    }
+
+    // Regras para Evoluções
+    match /evolutions/{evolutionId} {
+      allow read: if true;
+      allow write: if isString(request.resource.data.patient_id) &&
+                      isString(request.resource.data.student_id) &&
+                      isString(request.resource.data.status);
+    }
+
+    // Regras para Configurações
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isList(request.resource.data.workDays) &&
+                      isString(request.resource.data.startTime) &&
+                      isString(request.resource.data.endTime);
+    }
+  }
+}
