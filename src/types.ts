@@ -23,6 +23,9 @@ export interface Patient {
   address: string;
   status: PatientStatus;
   age?: number;
+  created_at?: string;
+  responsible_student_id?: string;
+  responsible_student_name?: string;
 }
 
 export type EvolutionStatus = 'PENDING' | 'APPROVED' | 'REJECTED';

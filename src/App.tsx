@@ -18,7 +18,8 @@ import {
   LayoutDashboard,
   Trash2,
   Edit2,
-  Printer
+  Printer,
+  Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -623,7 +624,8 @@ function RegisterPatientView({ onComplete, patients, setPatients }: { onComplete
     const newPatient: Omit<Patient, 'id'> = {
       ...formData,
       medical_record_number: Math.floor(100000 + Math.random() * 900000).toString(),
-      status: 'TRIAGEM'
+      status: 'TRIAGEM',
+      created_at: new Date().toISOString().split('T')[0]
     };
 
     addDoc(collection(db, 'patients'), newPatient)
@@ -1366,6 +1368,10 @@ function MyAppointmentsView({ user, appointments, setAppointments, patients, set
 
 function PatientHistoryView({ patients, setPatients, appointments, setAppointments, evolutions, setEvolutions, user, onBack, settings }: { patients: Patient[], setPatients: React.Dispatch<React.SetStateAction<Patient[]>>, appointments: Appointment[], setAppointments: React.Dispatch<React.SetStateAction<Appointment[]>>, evolutions: Evolution[], setEvolutions: React.Dispatch<React.SetStateAction<Evolution[]>>, user: User, onBack: () => void, settings: ClinicSettings }) {
   const [selectedPatientId, setSelectedPatientId] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState<PatientStatus | ''>('');
+  const [filterDate, setFilterDate] = useState('');
+  const [filterAttendant, setFilterAttendant] = useState('');
   const [selectedEvolution, setSelectedEvolution] = useState<Evolution | null>(null);
   const [feedback, setFeedback] = useState('');
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
@@ -1373,6 +1379,25 @@ function PatientHistoryView({ patients, setPatients, appointments, setAppointmen
   const [editingPatientData, setEditingPatientData] = useState<Partial<Patient>>({});
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const filteredPatients = useMemo(() => {
+    return patients.filter(p => {
+      const name = p.name?.toLowerCase() || '';
+      const medicalRecord = p.medical_record_number?.toString() || '';
+      const cpf = p.cpf?.toString() || '';
+      const search = searchTerm.toLowerCase();
+
+      const matchesSearch = name.includes(search) || 
+                           medicalRecord.includes(search) ||
+                           cpf.includes(search);
+      const matchesStatus = filterStatus ? p.status === filterStatus : true;
+      const matchesDate = filterDate ? p.created_at === filterDate : true;
+      const matchesAttendant = filterAttendant ? 
+        p.responsible_student_name?.toLowerCase().includes(filterAttendant.toLowerCase()) : true;
+      
+      return matchesSearch && matchesStatus && matchesDate && matchesAttendant;
+    });
+  }, [patients, searchTerm, filterStatus, filterDate, filterAttendant]);
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
   const patientAppointments = appointments
@@ -1650,18 +1675,59 @@ function PatientHistoryView({ patients, setPatients, appointments, setAppointmen
         )}
       </header>
 
-      <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
-        <label className="block text-sm font-medium text-zinc-700 mb-2">Selecione o Paciente</label>
-        <select
-          className="w-full px-4 py-2 rounded-lg border border-zinc-300 outline-none focus:ring-2 focus:ring-indigo-500"
-          value={selectedPatientId}
-          onChange={e => setSelectedPatientId(e.target.value)}
-        >
-          <option value="">Selecione um paciente...</option>
-          {patients.map(p => (
-            <option key={p.id} value={p.id}>{p.name} (Prontuário: {p.medical_record_number})</option>
-          ))}
-        </select>
+      <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+            <input
+              type="text"
+              placeholder="Buscar por nome, prontuário ou CPF..."
+              className="w-full pl-10 pr-4 py-2 rounded-lg border border-zinc-300 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <select
+            className="w-full px-4 py-2 rounded-lg border border-zinc-300 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+            value={filterStatus}
+            onChange={e => setFilterStatus(e.target.value as PatientStatus | '')}
+          >
+            <option value="">Todos os Status</option>
+            {Object.entries(PATIENT_STATUS_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+          <div className="flex flex-col">
+            <input
+              type="date"
+              className="w-full px-4 py-2 rounded-lg border border-zinc-300 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              value={filterDate}
+              onChange={e => setFilterDate(e.target.value)}
+              title="Data de Cadastro"
+            />
+          </div>
+          <input
+            type="text"
+            placeholder="Atendente Responsável..."
+            className="w-full px-4 py-2 rounded-lg border border-zinc-300 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+            value={filterAttendant}
+            onChange={e => setFilterAttendant(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-700 mb-2">Selecione o Paciente ({filteredPatients.length} encontrados)</label>
+          <select
+            className="w-full px-4 py-2 rounded-lg border border-zinc-300 outline-none focus:ring-2 focus:ring-indigo-500"
+            value={selectedPatientId}
+            onChange={e => setSelectedPatientId(e.target.value)}
+          >
+            <option value="">Selecione um paciente...</option>
+            {filteredPatients.map(p => (
+              <option key={p.id} value={p.id}>{p.name} (Prontuário: {p.medical_record_number})</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {isEditingPatient && selectedPatient && (
@@ -1722,6 +1788,16 @@ function PatientHistoryView({ patients, setPatients, appointments, setAppointmen
                   <option value="ALTA">Alta</option>
                   <option value="DESISTENCIA">Desistência</option>
                 </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">Atendente Responsável</label>
+                <input
+                  type="text"
+                  placeholder="Nome do atendente..."
+                  className="w-full px-4 py-2 rounded-lg border border-zinc-300 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={editingPatientData.responsible_student_name || ''}
+                  onChange={e => setEditingPatientData({ ...editingPatientData, responsible_student_name: e.target.value })}
+                />
               </div>
               <div className="md:col-span-2 flex gap-4 pt-4">
                 <button
@@ -2160,6 +2236,25 @@ function SettingsView({ users, setUsers, settings, onUpdate, onUpdateSettings }:
     e.target.value = '';
   };
 
+  const handleDownloadTemplate = () => {
+    const data = [
+      { 
+        'Nome': 'Exemplo Silva', 
+        'Matrícula': '2023001', 
+        'Tipo de Acesso': 'Atendente' 
+      },
+      { 
+        'Nome': '', 
+        'Matrícula': '', 
+        'Tipo de Acesso': 'Opções: Atendente, Atendente Clinica, Professor, Administrador' 
+      }
+    ];
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Modelo");
+    XLSX.writeFile(wb, "modelo_importacao_usuarios.xlsx");
+  };
+
   const handleEditUser = (user: User) => {
     setFormData({
       name: user.name,
@@ -2277,21 +2372,31 @@ function SettingsView({ users, setUsers, settings, onUpdate, onUpdateSettings }:
         <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
           <div className="flex justify-between items-center mb-6">
             <h3 className="font-bold text-zinc-900">{editingId ? 'Editar Usuário' : 'Cadastrar Usuário'}</h3>
-            <div className="relative">
-              <input
-                type="file"
-                accept=".xlsx, .xls"
-                onChange={handleImportExcel}
-                className="hidden"
-                id="excel-import"
-              />
-              <label
-                htmlFor="excel-import"
-                className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100 transition-colors cursor-pointer border border-green-200"
+            <div className="flex gap-2">
+              <button
+                onClick={handleDownloadTemplate}
+                className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors border border-blue-200"
+                title="Baixar Modelo de Planilha"
               >
-                <ClipboardList size={16} />
-                Importar Excel
-              </label>
+                <Download size={16} />
+                Modelo
+              </button>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".xlsx, .xls"
+                  onChange={handleImportExcel}
+                  className="hidden"
+                  id="excel-import"
+                />
+                <label
+                  htmlFor="excel-import"
+                  className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100 transition-colors cursor-pointer border border-green-200"
+                >
+                  <ClipboardList size={16} />
+                  Importar
+                </label>
+              </div>
             </div>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -2756,7 +2861,8 @@ function PublicRegisterView({ onBack, patients, setPatients }: { onBack: () => v
     const newPatient: Omit<Patient, 'id'> = {
       ...formData,
       medical_record_number: Math.floor(100000 + Math.random() * 900000).toString(),
-      status: 'TRIAGEM'
+      status: 'TRIAGEM',
+      created_at: new Date().toISOString().split('T')[0]
     };
 
     addDoc(collection(db, 'patients'), newPatient)
